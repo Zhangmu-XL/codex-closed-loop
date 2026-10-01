@@ -1,8 +1,0 @@
-# Never publish run state, the example's state, or the generator's own tooling.
-state/
-.codex-scratch/
-seeds/task-*.txt
-examples/*/state/
-examples/*/.codex-scratch/
-examples/
-docs/handoff-prompt.md
