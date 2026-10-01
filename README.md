@@ -48,7 +48,7 @@ explicitly when it may stop and ask for one, and when it may not.
 ## Install
 
 ```bash
-git clone https://github.com/<you>/codex-closed-loop
+git clone https://github.com/Zhangmu-XL/codex-closed-loop
 cd codex-closed-loop
 node bridge.mjs selftest     # 160 offline assertions, no network, no tokens
 ```
@@ -58,6 +58,24 @@ Requirements:
 - **Node.js ≥ 20**
 - **Codex CLI** installed and logged in (`codex --version`; auth in `~/.codex/auth.json`)
 - nothing else
+
+## ⚠️ Read before running it on real work
+
+This tool drives an agent that **runs commands and edits files on your machine**, and
+it spends your Codex quota. Before pointing it at anything you care about:
+
+- Read `bridge.mjs` and `lib/`. It is ~1300 lines and has no dependencies — it is meant
+  to be audited, not trusted.
+- Start with `examples/hello-loop/`, then a throwaway repo. Not your main branch.
+- Set `project.workspace` and `codex.workdir` to directories you are willing to lose.
+  The default `sandbox: "workspace-write"` is there for a reason; do not reach for
+  `danger-full-access` until you trust the setup.
+- Check `budgets.*` before an unattended run. They are local gates, not a billing
+  control — also set a hard limit in your OpenAI account.
+- Look at `state/calls/*.json` after a run. It holds every prompt actually sent, so you
+  can verify the "summaries only" claim rather than taking my word for it.
+
+No warranty, MIT licensed, and the [known limits](#known-limits) are real.
 
 ## Quick start
 

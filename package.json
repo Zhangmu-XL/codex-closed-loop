@@ -4,6 +4,13 @@
   "description": "A closed loop where Codex is the brain and an executor agent does the work: the executor reports, Codex decides, the loop continues with no orchestrator in between.",
   "type": "module",
   "license": "MIT",
+  "author": "Zhangmu-XL",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zhangmu-XL/codex-closed-loop.git"
+  },
+  "bugs": { "url": "https://github.com/Zhangmu-XL/codex-closed-loop/issues" },
+  "homepage": "https://github.com/Zhangmu-XL/codex-closed-loop#readme",
   "engines": { "node": ">=20" },
   "bin": { "codex-loop": "./bridge.mjs" },
   "scripts": {
