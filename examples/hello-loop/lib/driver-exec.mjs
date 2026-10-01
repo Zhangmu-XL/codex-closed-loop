@@ -14,12 +14,31 @@ import { join } from 'node:path';
 import { parseJsonl, summarizeEvents, normalizeUsage } from './jsonl.mjs';
 import { codexCandidates } from './config.mjs';
 
+/**
+ * A usable working directory for probing.
+ *
+ * `codex.workdir` defaults to `.codex-scratch`, which is gitignored -- so in a fresh
+ * clone it does NOT exist. Spawning with a missing cwd fails with ENOENT and
+ * `status: null`, which this function previously read as "this executable does not
+ * work", so a perfectly good codex.exe was reported as not found. Create it, and fall
+ * back to the project root if that is not possible.
+ */
+function probeWorkdir(cfg) {
+  const dir = cfg.__workdir;
+  try {
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch {
+    return cfg.__root ?? process.cwd();
+  }
+}
+
 /** Resolve the Codex CLI executable once per process. */
 let cachedExe;
 export function resolveCodexExe(cfg, { fresh = false } = {}) {
   if (cachedExe && !fresh) return cachedExe;
   const candidates = codexCandidates(cfg).filter(Boolean);
-  const probeCwd = cfg.__workdir;
+  const probeCwd = probeWorkdir(cfg);
 
   // An explicit exePath is a declaration, not a hint. Honor it without probing or
   // second-guessing its existence: the spawn itself reports a bad path as a

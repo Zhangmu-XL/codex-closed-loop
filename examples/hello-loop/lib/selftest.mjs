@@ -1326,6 +1326,31 @@ export async function runSelftest(cfg, { keep = false } = {}) {
     labelled.json?.reason !== undefined || labelled.json?.ok === false || labelled.json?.archived !== undefined,
     JSON.stringify(labelled.json).slice(0, 200));
 
+  /* --- S38: probing survives a missing workdir -------------------------- */
+  // `.codex-scratch` is gitignored, so a fresh clone does NOT have it. Spawning with a
+  // missing cwd fails ENOENT with status null, which resolveCodexExe read as "this
+  // executable does not work" -- so a perfectly good codex.exe was reported as not
+  // found, on the very first command a new user runs.
+  const missingCwd = join(sb.dir, 'never-created-scratch');
+  rmSync(missingCwd, { recursive: true, force: true });
+  const { resolveCodexExe } = await import('./driver-exec.mjs');
+  const probeCfg = {
+    ...loadConfig({ configPath: sb.configPath, rootOverride: sb.dir }),
+    __workdir: missingCwd,
+  };
+  let resolved = null;
+  let resolveErr = null;
+  try {
+    resolved = resolveCodexExe(probeCfg, { fresh: true });
+  } catch (err) {
+    resolveErr = err;
+  }
+  check('S38 a missing codex.workdir does not break CLI resolution',
+    resolveErr === null,
+    resolveErr ? String(resolveErr.message).split('\n')[0] : '');
+  check('S38 the workdir is created as a side effect',
+    existsSync(missingCwd), missingCwd);
+
   /* ---------------------------------------------------------------- report */
   const stateDir = join(sb.dir, 'state');
   writeFileSync(join(stateDir, 'selftest-report.txt'),
