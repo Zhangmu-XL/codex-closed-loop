@@ -8,7 +8,7 @@
     "transport": "auto",
     "exePath": null,
     "model": null,
-    "reasoningEffort": "high",
+    "reasoningEffort": null,
     "sandbox": "workspace-write",
     "extraArgs": [],
     "workdir": ".codex-scratch",
