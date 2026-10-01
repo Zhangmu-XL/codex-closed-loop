@@ -1,0 +1,12 @@
+# Keep line endings consistent across platforms. Without this, a Windows checkout
+# writes CRLF and every diff across OSes shows as a full-file change.
+* text=auto eol=lf
+
+# Explicit, so shells and editors never disagree about these.
+*.mjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+
+# The example's expected bytes must never be rewritten.
+examples/hello-loop/work/hello.txt -text

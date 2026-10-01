@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CodexVerdict",
+  "description": "The brain's decision after reviewing one executor result card. Every property is listed in `required` because the structured-output endpoint rejects optional properties; use null or an empty array for 'not applicable'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "action", "reason", "feedbackForExecutor", "reworkInstructions",
+    "nextTask", "additionalTasks", "summaryForRolling", "tokensEstimate"
+  ],
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["pass", "rework", "next", "stop"],
+      "description": "pass = accepted, stop here. rework = fix and resubmit. next = accepted, execute nextTask now. stop = halt the run."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Why this decision. One or two sentences."
+    },
+    "feedbackForExecutor": {
+      "type": "string",
+      "description": "Short actionable message for the executor. Use \"none\" when there is nothing to add."
+    },
+    "reworkInstructions": {
+      "type": ["string", "null"],
+      "description": "Required when action is rework: exactly what to change and how to verify it. Use null otherwise."
+    },
+    "nextTask": {
+      "type": ["object", "null"],
+      "description": "Required when action is next. The single next task, fully self-contained. Use null otherwise.",
+      "additionalProperties": false,
+      "required": ["taskId", "title", "prompt", "verification", "constraints", "dependsOn"],
+      "properties": {
+        "taskId": { "type": "string" },
+        "title": { "type": "string" },
+        "prompt": { "type": "string", "description": "Full instructions for the executor." },
+        "verification": { "type": "string", "description": "How the executor must prove the work is done." },
+        "constraints": { "type": "array", "items": { "type": "string" }, "description": "Empty array when there are none." },
+        "dependsOn": { "type": "array", "items": { "type": "string" }, "description": "Empty array when there are none." }
+      }
+    },
+    "additionalTasks": {
+      "type": "array",
+      "description": "Extra tasks to append to the queue (not executed now). Empty array when there are none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["taskId", "title", "prompt", "verification", "constraints", "dependsOn"],
+        "properties": {
+          "taskId": { "type": "string" },
+          "title": { "type": "string" },
+          "prompt": { "type": "string" },
+          "verification": { "type": "string" },
+          "constraints": { "type": "array", "items": { "type": "string" } },
+          "dependsOn": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "summaryForRolling": {
+      "type": "string",
+      "description": "One line kept in the rolling summary. Keep it within summary.oneLineMaxChars (400 by default); the bridge trims anything longer."
+    },
+    "tokensEstimate": {
+      "type": ["number", "null"],
+      "description": "Optional self-estimate of tokens used. The bridge uses measured usage, so null is fine."
+    }
+  }
+}

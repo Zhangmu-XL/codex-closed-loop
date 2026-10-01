@@ -1,0 +1,14 @@
+{
+  "$comment": "Optional seeded queue. Non-empty means `run init` uses it and does NOT call Codex for planning.",
+  "goal": "Prove a freshly scaffolded project can complete one loop.",
+  "tasks": [
+    {
+      "taskId": "T-001",
+      "title": "Create the greeting file",
+      "prompt": "Create the file work/hello.txt containing exactly the text 你好，闭环。 followed by a single LF newline, in UTF-8 without a BOM. Create no other file.",
+      "verification": "Read work/hello.txt back in a separate process and confirm the contents are exactly 你好，闭环。 plus one LF, and report that process's exit code and the bytes read.",
+      "constraints": ["Create exactly one file: work/hello.txt"],
+      "dependsOn": []
+    }
+  ]
+}

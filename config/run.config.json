@@ -1,0 +1,59 @@
+{
+  "$comment": "Reference config. Easiest path: run `node bridge.mjs init <dir>`, which writes this file with a probed codex.exePath. See README.",
+  "project": {
+    "name": "demo",
+    "workspace": "."
+  },
+  "codex": {
+    "transport": "auto",
+    "exePath": null,
+    "model": null,
+    "sandbox": "workspace-write",
+    "extraArgs": [],
+    "workdir": ".codex-scratch",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "apiModel": "gpt-5.1-codex"
+  },
+  "budgets": {
+    "maxRounds": 40,
+    "maxCodexCallsPerTask": 6,
+    "maxReviseAttempts": 2,
+    "maxRepairAttempts": 1,
+    "maxTurnsTotal": 200,
+    "maxRequestsPerDay": 60,
+    "maxTokensPerDay": 1500000,
+    "maxTokensPerCall": 120000
+  },
+  "timeouts": {
+    "codexCallMs": 900000,
+    "codexStartupMs": 120000,
+    "killGraceMs": 5000,
+    "lockTtlMs": 960000,
+    "lockWaitMs": 60000,
+    "maxRunDurationMs": 21600000
+  },
+  "summary": {
+    "oneLineMaxChars": 400,
+    "rollingMaxChars": 12288,
+    "cardsKept": 12,
+    "compactOnOverflow": true
+  },
+  "retry": {
+    "backoffMs": 2000,
+    "maxTransportRetries": 2
+  },
+  "maxExecutorRuns": 25,
+  "unattended": {
+    "enabledByDefault": false,
+    "askPermissionBeforeExternalActions": true
+  },
+  "compact": {
+    "auto": true,
+    "maxThreadTokens": 150000
+  },
+  "queueMirror": {
+    "enabled": false,
+    "thread": null,
+    "timeoutMs": 30000
+  }
+}

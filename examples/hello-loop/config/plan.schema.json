@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CodexRunPlan",
+  "description": "The brain's decomposition of the project into an ordered task queue.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["goal", "successCriteria", "tasks", "notes"],
+  "properties": {
+    "goal": {
+      "type": "string",
+      "description": "One-sentence restatement of the project goal."
+    },
+    "successCriteria": {
+      "type": "array",
+      "description": "How the whole run is judged complete.",
+      "items": { "type": "string" }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered task queue. The first task is dispatched immediately.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["taskId", "title", "prompt", "verification", "constraints", "dependsOn"],
+        "properties": {
+          "taskId": { "type": "string", "description": "Stable id, e.g. T-001." },
+          "title": { "type": "string" },
+          "prompt": {
+            "type": "string",
+            "description": "Self-contained instructions for one executor agent. No orchestrator will expand this."
+          },
+          "verification": {
+            "type": "string",
+            "description": "Objective evidence the executor must produce."
+          },
+          "constraints": {
+            "type": "array",
+            "description": "Hard rules for this task. Use an empty array when there are none.",
+            "items": { "type": "string" }
+          },
+          "dependsOn": {
+            "type": "array",
+            "description": "Task ids that must be accepted first. Use an empty array when there are none.",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "description": "Optional notes about sequencing or risk. Use null when there are none."
+    }
+  }
+}
