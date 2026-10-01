@@ -232,8 +232,8 @@ the effort it was created with, exactly like `--sandbox` and `-m`. Change it, th
   "maxReviseAttempts": 2,        // reworks allowed before it must pass or stop
   "maxRepairAttempts": 1,        // repair rounds for a malformed verdict
   "maxTurnsTotal": 200,
-  "maxRequestsPerDay": 60,
-  "maxTokensPerDay": 1500000
+  "maxRequestsPerDay": 10000,    // far above any real run -- see below
+  "maxTokensPerDay": 100000000   // ditto: token spend is NOT a working limit
 },
 "timeouts": {
   "codexCallMs": 900000,         // hard per-call timeout
@@ -242,13 +242,39 @@ the effort it was created with, exactly like `--sandbox` and `-m`. Change it, th
 "maxExecutorRuns": 25,           // how many executors one --executor chain may launch
 "compact": {
   "auto": true,
-  "maxThreadTokens": 150000        // roll the thread over before context grows unbounded
+  "maxThreadTokens": 500000       // a CONTEXT-QUALITY guard, not a cost guard
 }
 ```
+
+### Token spend is not a working limit
+
+The two daily counters sit far above any realistic run on purpose. They stop a runaway (a
+crash loop, a runaway prompt), they do not ration normal work — what actually shapes a run
+is `maxRounds`, `maxReviseAttempts` and `maxRunDurationMs`.
+
+`budget.json` keeps counting either way, because `status` reports it and the thread
+rollover reads it. Narrow the limits deliberately if you share an account or run on a
+metered budget.
 
 Token usage is **measured from Codex's own event stream**, not self-reported. Counters
 roll over on the `Asia/Shanghai` calendar day. These are local accounting gates, not a
 billing control — set a hard limit in your OpenAI account too.
+
+### Reasoning effort
+
+There is no `--reasoning-effort` flag on `codex exec` — it is a config key, so the
+bridge overrides it with `-c model_reasoning_effort="..."`. Leaving it `null` means the
+brain inherits whatever your interactive sessions use, which is often tuned for chat
+rather than for judging work.
+
+Measured here (`gpt-5.6-luna`): `low` produced **0 reasoning tokens**, `high` produced
+18–49. The value is **model-specific** — that model rejects `minimal` outright — so a bad
+value fails on the first call with `unsupported_value` naming the parameter, rather than
+degrading quietly.
+
+Only applies to a **fresh** `codex exec`: `resume` accepts no `-c`, so a thread keeps the
+effort it was created with, exactly like `--sandbox` and `-m`. Change it, then `compact`
+to start a new thread with the new value.
 
 ### Summaries
 

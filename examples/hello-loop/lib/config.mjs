@@ -37,8 +37,16 @@ export const DEFAULTS = {
     maxReviseAttempts: 2,
     maxRepairAttempts: 1,
     maxTurnsTotal: 200,
-    maxRequestsPerDay: 60,
-    maxTokensPerDay: 1500000,
+    // Token spend is NOT a working limit by default. These two daily counters sit far
+    // above any realistic run on purpose: they are a runaway circuit-breaker (a crash
+    // loop, a runaway prompt), not a rationing mechanism. What actually shapes a run
+    // is maxRounds, maxReviseAttempts and timeouts.maxRunDurationMs.
+    //
+    // Narrow them deliberately if you are sharing an account or running on a metered
+    // budget. `budget.json` keeps counting either way -- `status` and the thread
+    // rollover both read it.
+    maxRequestsPerDay: 10000,
+    maxTokensPerDay: 100000000,
     maxTokensPerCall: 120000,
   },
   timeouts: {
@@ -74,10 +82,15 @@ export const DEFAULTS = {
     askPermissionBeforeExternalActions: true,
   },
   compact: {
-    // Roll onto a fresh thread once the running thread has ingested this much, so
-    // an unattended loop does not grow its context without bound.
+    // Roll onto a fresh thread once the running thread has ingested this much, so an
+    // unattended loop does not grow its context without bound.
+    //
+    // This is a CONTEXT-QUALITY guard, not a cost guard: past a point the thread
+    // accumulates enough history that the brain starts losing the current task in it,
+    // and each round re-reads all of it. Set high if you would rather keep continuity
+    // and accept the per-round growth.
     auto: true,
-    maxThreadTokens: 150000,
+    maxThreadTokens: 500000,
   },
   queueMirror: {
     // Push each verdict into a Codex DESKTOP conversation so it is visible in the UI

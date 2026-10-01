@@ -8,7 +8,7 @@
     "transport": "auto",
     "exePath": null,
     "model": null,
-    "reasoningEffort": null,
+    "reasoningEffort": "high",
     "sandbox": "workspace-write",
     "extraArgs": [],
     "workdir": ".codex-scratch",
@@ -16,13 +16,14 @@
     "apiModel": "gpt-5.1-codex"
   },
   "budgets": {
+    "_comment": "Token spend is NOT a working limit here. The two daily counters below are set far above any real run: they exist only as a runaway circuit-breaker (a crash loop, a bad prompt), not to ration normal work. The limits that actually shape a run are maxRounds, maxReviseAttempts and maxRunDurationMs.",
     "maxRounds": 40,
     "maxCodexCallsPerTask": 6,
     "maxReviseAttempts": 2,
     "maxRepairAttempts": 1,
     "maxTurnsTotal": 200,
-    "maxRequestsPerDay": 60,
-    "maxTokensPerDay": 1500000,
+    "maxRequestsPerDay": 10000,
+    "maxTokensPerDay": 100000000,
     "maxTokensPerCall": 120000
   },
   "timeouts": {
@@ -32,6 +33,10 @@
     "lockTtlMs": 960000,
     "lockWaitMs": 60000,
     "maxRunDurationMs": 21600000
+  },
+  "compact": {
+    "auto": true,
+    "maxThreadTokens": 500000
   },
   "summary": {
     "oneLineMaxChars": 400,
@@ -47,10 +52,6 @@
   "unattended": {
     "enabledByDefault": false,
     "askPermissionBeforeExternalActions": true
-  },
-  "compact": {
-    "auto": true,
-    "maxThreadTokens": 150000
   },
   "queueMirror": {
     "enabled": false,
