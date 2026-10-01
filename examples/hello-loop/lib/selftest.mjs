@@ -1072,6 +1072,60 @@ export async function runSelftest(cfg, { keep = false } = {}) {
   check('S30 unset effort adds nothing to argv',
     !off30.includes('model_reasoning_effort'), JSON.stringify(off30.join(' ')).slice(0, 200));
 
+  /* --- S31: config migration ------------------------------------------- */
+  // Why this exists: `init` and `install-bridge` never overwrite an existing config
+  // (clobbering tuned limits would be worse than any drift), so a project created
+  // before a key existed has no path to adopt it. `reasoningEffort` was the first
+  // real case: a new config surface that silently did nothing in older projects.
+  const legacyDir = join(sb.dir, 'legacy');
+  rmSync(legacyDir, { recursive: true, force: true });
+  mkdirSync(join(legacyDir, 'config'), { recursive: true });
+  const legacyPath = join(legacyDir, 'config', 'run.config.json');
+  writeFileSync(legacyPath, JSON.stringify({
+    // Deliberately old schema: no configVersion, no reasoningEffort, no compact,
+    // and hand-tuned values that MUST survive.
+    project: { name: 'legacy', workspace: join(legacyDir, 'work') },
+    codex: { exePath: null, model: null, sandbox: 'workspace-write', workdir: join(legacyDir, 'scratch') },
+    budgets: { maxRounds: 7, maxRequestsPerDay: 42, maxTokensPerDay: 999 },
+    summary: { oneLineMaxChars: 250 },
+  }, null, 2), 'utf8');
+
+  const dry = bridge(sb, ['upgrade-config', legacyDir, '--dry-run']);
+  check('S31 a dry run reports the missing keys', dry.code === 0 && dry.json?.addedCount > 0,
+    `code=${dry.code} added=${dry.json?.addedCount}`);
+  check('S31 a dry run writes nothing',
+    JSON.parse(readFileSync(legacyPath, 'utf8')).configVersion === undefined);
+
+  const up = bridge(sb, ['upgrade-config', legacyDir]);
+  check('S31 the upgrade runs', up.code === 0 && up.json?.written === true, JSON.stringify(up.json).slice(0, 200));
+
+  const migrated = JSON.parse(readFileSync(legacyPath, 'utf8'));
+  check('S31 the key that motivated this is added',
+    Object.prototype.hasOwnProperty.call(migrated.codex, 'reasoningEffort'),
+    `codex keys: ${Object.keys(migrated.codex).join(',')}`);
+  check('S31 hand-tuned values are NOT overwritten',
+    migrated.budgets.maxRounds === 7
+    && migrated.budgets.maxRequestsPerDay === 42
+    && migrated.budgets.maxTokensPerDay === 999
+    && migrated.summary.oneLineMaxChars === 250,
+    JSON.stringify(migrated.budgets) + JSON.stringify(migrated.summary));
+  check('S31 new keys arrive with their defaults',
+    migrated.budgets.maxReviseAttempts === 2 && migrated.compact?.auto === true,
+    JSON.stringify(migrated.budgets));
+  check('S31 the schema version is stamped',
+    migrated.configVersion === 2, `configVersion=${migrated.configVersion}`);
+
+  // Idempotent: a second run must find nothing to do.
+  const again = bridge(sb, ['upgrade-config', legacyDir]);
+  check('S31 a second upgrade is a no-op',
+    again.code === 0 && again.json?.addedCount === 0 && again.json?.written === false,
+    JSON.stringify(again.json).slice(0, 200));
+
+  // And the migrated config must actually load and drive the bridge.
+  const probe = bridge(sb, ['--project-root', legacyDir, '--config', legacyPath, 'status']);
+  check('S31 the migrated config loads', probe.code === 0 && probe.json?.ok === true,
+    `code=${probe.code} ${JSON.stringify(probe.json).slice(0, 200)}`);
+
   /* ---------------------------------------------------------------- report */
   const stateDir = join(sb.dir, 'state');
   writeFileSync(join(stateDir, 'selftest-report.txt'),

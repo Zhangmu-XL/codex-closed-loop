@@ -106,6 +106,22 @@ rather keep one checkout driving several projects, re-run
 `node tools/install-bridge.mjs <dir>` after updating the framework, or pass
 `--project-root` and `--config` explicitly everywhere.
 
+### After updating the framework
+
+`install-bridge` refuses to overwrite an existing config — clobbering your tuned limits
+would be worse than any schema drift. That leaves a gap: a project created before a new
+key existed never adopts it, so the feature silently does nothing.
+
+```bash
+cd <project-root>
+node bridge.mjs upgrade-config --dry-run   # show what is missing
+node bridge.mjs upgrade-config             # add missing keys
+```
+
+It is conservative by construction: **existing values always win** (including `null`),
+nothing is ever removed, and it reports keys the schema no longer knows about so you can
+decide. `configVersion` tracks the drift, and a second run is a no-op.
+
 `run init` prints a `launchCommand`. Run it, or point your own agent at the brief.
 When the agent has a card, `node bridge.mjs ask --card <path>` closes the round.
 

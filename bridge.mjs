@@ -133,6 +133,108 @@ const isNestedRound = process.env.DSH_BRIDGE_CHAIN === '1';
 const suppressVerdict = Boolean(flags.executor) && !isNestedRound;
 
 /**
+ * Add keys a project's config is missing, without touching values it already has.
+ *
+ * Why this has to exist: `init` and `install-bridge` deliberately never overwrite an
+ * existing config (clobbering someone's tuned limits would be worse than any schema
+ * drift). But that leaves no path for a project created before a new key existed, so
+ * new features silently do nothing -- `reasoningEffort` being the first real case.
+ *
+ * Conservative by construction: existing values always win, including `null`, and
+ * nothing is ever removed.
+ */
+function upgradeProjectConfig(target, { dryRun = false } = {}) {
+  const root = resolve(target);
+
+  // Find the config: <root>/config/run.config.json, or a path passed directly.
+  let cfgPath = join(root, 'config', 'run.config.json');
+  if (!existsSync(cfgPath) && existsSync(root) && root.endsWith('.json')) cfgPath = root;
+  if (!existsSync(cfgPath)) {
+    process.stderr.write(`upgrade-config: no config at ${cfgPath}\n`);
+    process.stderr.write('Run `node bridge.mjs init <dir>` first.\n');
+    exitWith(2);
+    return;
+  }
+
+  let current;
+  try {
+    current = JSON.parse(readFileSync(cfgPath, 'utf8').replace(/^\uFEFF/, ''));
+  } catch (err) {
+    process.stderr.write(`upgrade-config: ${cfgPath} is not valid JSON: ${err.message}\n`);
+    exitWith(2);
+    return;
+  }
+
+  // Captured before the walk adds configVersion, so a pre-versioning config reports
+  // its real origin (1) rather than the value we just inserted.
+  const fromVersion = Object.prototype.hasOwnProperty.call(current, 'configVersion')
+    ? current.configVersion
+    : 1;
+  const added = [];
+  const kept = [];  const walked = new Set();
+
+  const walk = (defs, cur, path) => {
+    for (const [key, defVal] of Object.entries(defs)) {
+      if (key.startsWith('_') || key === '$comment') continue;
+      const here = path ? `${path}.${key}` : key;
+      walked.add(here);
+      const has = Object.prototype.hasOwnProperty.call(cur, key);
+
+      if (!has) {
+        added.push({ key: here, value: defVal });
+        cur[key] = structuredClone(defVal);
+        continue;
+      }
+      const isPlainObject = (v) => v && typeof v === 'object' && !Array.isArray(v);
+      if (isPlainObject(defVal) && isPlainObject(cur[key])) {
+        walk(defVal, cur[key], here);
+      } else {
+        kept.push(here);
+      }
+    }
+  };
+
+  walk(DEFAULTS, current, '');
+
+  // Report keys the project carries that the schema no longer knows about. Not an
+  // error: it may be a hand-written key, or one a different framework version added.
+  const stale = [];
+  const collect = (cur, path) => {
+    for (const [key, val] of Object.entries(cur)) {
+      if (key.startsWith('_') || key === '$comment') continue;
+      const here = path ? `${path}.${key}` : key;
+      const valIsObj = val && typeof val === 'object' && !Array.isArray(val);
+      const known = walked.has(here);
+      if (!known && !valIsObj) { stale.push(here); continue; }
+      if (valIsObj && !known) collect(val, here);
+    }
+  };
+  collect(current, '');
+
+  current.configVersion = DEFAULTS.configVersion;
+
+  if (!dryRun && added.length) {
+    writeFileSync(cfgPath, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
+  }
+
+  out({
+    ok: true,
+    config: cfgPath,
+    dryRun,
+    configVersion: { from: fromVersion, to: DEFAULTS.configVersion },
+    addedKeys: added.map((a) => a.key),
+    addedCount: added.length,
+    keptCount: kept.length,
+    unknownKeys: stale.sort(),
+    written: !dryRun && added.length > 0,
+    note: added.length
+      ? (dryRun ? 'dry run: nothing written' : 'missing keys added; existing values untouched')
+      : 'already up to date',
+    next: added.length ? [`Review the added keys in ${cfgPath}, then run: node bridge.mjs doctor`] : [],
+  });
+}
+
+/**
  * Scaffold a new project directory, then point you at `doctor`.
  *
  * Exists because a shipped `run.config.json` cannot contain a working
@@ -240,6 +342,10 @@ if (verb === 'init') {
   // word, and defaults to the current directory.
   scaffoldProject(flags._[1] ?? '.');
   exitWith(0);
+} else if (verb === 'upgrade-config') {
+  // Also config-independent: it repairs a config that may predate the current schema.
+  upgradeProjectConfig(flags._[1] ?? '.', { dryRun: flags.dryRun === true });
+  exitWith(process.exitCode ?? 0);
 } else {
   await main();
 }
@@ -1390,6 +1496,9 @@ function printHelp() {
   node bridge.mjs init [dir]          scaffold a project here or in <dir>:
                                       config + PROJECT.md template + a probed
                                       codex.exePath, and copy the bridge in
+  node bridge.mjs upgrade-config [dir] [--dry-run]
+                                      add config keys this project is missing
+                                      (never overwrites existing values)
   node bridge.mjs doctor [--live]     probe the Codex CLI (add --live for a real round-trip)
   node bridge.mjs run init            have Codex decompose seeds/PROJECT.md into a task queue
   node bridge.mjs ask --card <file>   submit a result card, block until Codex answers

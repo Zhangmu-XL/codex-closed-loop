@@ -74,6 +74,20 @@ node bridge.mjs run init      # 让 Codex 拆解（1 次调用）
 node tools\install-bridge.mjs E:\my-project
 ```
 
+**但配置不会被动。** `install-bridge` 拒绝覆盖已有配置 —— 覆盖你调好的限额比 schema
+漂移更糟。这留下一个缺口：**新版本加的字段，老项目永远拿不到**，于是新功能静默不生效。
+
+所以有个迁移命令：
+
+```powershell
+cd E:\my-project
+node bridge.mjs upgrade-config --dry-run    # 看缺什么
+node bridge.mjs upgrade-config              # 补上
+```
+
+它结构上就是保守的：**已有的值永远优先**（包括 `null`），**从不删除任何键**，并且会
+列出 schema 已不认识的键让你自己判断。`configVersion` 记录漂移，第二次运行是空操作。
+
 ---
 
 ## 命令

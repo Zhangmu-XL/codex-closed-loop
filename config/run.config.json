@@ -1,5 +1,6 @@
 {
-  "$comment": "Reference config. Easiest path: run `node bridge.mjs init <dir>`, which writes this file with a probed codex.exePath. See README.",
+  "configVersion": 2,
+  "$comment": "Reference config. Easiest path: run `node bridge.mjs init <dir>`, which writes this file with a probed codex.exePath. See README. After updating the framework, `node bridge.mjs upgrade-config` adds any keys a project is missing without touching existing values.",
   "project": {
     "name": "demo",
     "workspace": "."
