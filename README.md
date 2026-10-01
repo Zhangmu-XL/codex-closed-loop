@@ -1,5 +1,7 @@
 # codex-closed-loop
 
+English | [中文](README.zh.md)
+
 **Codex is the brain. Your agent does the work. There is no orchestrator in between.**
 
 An executor agent finishes a task, writes a structured result card, and calls Codex
