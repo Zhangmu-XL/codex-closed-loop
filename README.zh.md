@@ -184,25 +184,54 @@ node bridge.mjs ask --card state/cards/T-001.result.json `
 `codex exec` **没有** `--reasoning-effort` flag —— 它是配置键，桥用
 `-c model_reasoning_effort="..."` 覆盖。`null` 表示继承 `~/.codex/config.toml`。
 
-本机实测（`gpt-5.6-luna`）：`low` → **0** 推理 token；`high` → 18～49。
-这个值是**模型相关的**（该模型直接拒绝 `minimal`），所以填错会在第一次调用就报
-`unsupported_value` 并指名参数，不会静默降级。
+**档位是模型相关的，而且没有任何 flag 能列出它们。** 别猜，直接探：
 
-只在**全新 exec** 生效：`resume` 不接受 `-c`，线程保持创建时的强度。改了要
-`compact` 起新线程。
+```bash
+node bridge.mjs probe-effort
+```
 
-### 摘要
+它每档跑一道小题，报告"接不接受"和"实际推理了多少"。本机实测（`gpt-5.6-luna`）——
+注意 **`xhigh` 是存在的**，光看文档猜不到：
+
+| 档位 | 结果 | 推理 token |
+|---|---|---|
+| `minimal` | 被拒 —— `unsupported_value` | — |
+| `low` | 接受 | 133 |
+| `medium` | 接受 | 741 |
+| `high` | 接受 | 1466 |
+| `xhigh` | 接受 | **1502** |
+
+两点注意：填错会在**第一次真实调用**就报 `unsupported_value` 并指名参数，不会静默降级；
+而"接受"不等于"干得更多" —— 上面这张表有意义，是因为探测题**需要真推理**，用送分题
+测的话每一档都是 0。
+
+设好后要 `compact` 起新线程：`resume` 不接受 `-c`，一条活着的线程会保持它创建时的
+强度，和 `--sandbox`、`-m` 一样。
+
+### 摘要与人读卡片
+
+`summaryOneLine` 是唯一保证会被人读到的字段。**400 字符放得下结论，放不下"做了什么
++ 真实命令和退出码 + 还没解决什么"。** 如果看结果的人只读卡，就调大它 —— 同时调大
+`rollingMaxChars`，否则老卡会更早被挤掉：
 
 ```jsonc
 "summary": {
-  "oneLineMaxChars": 400,   // 超限的卡会被拒，且不花钱
-  "rollingMaxChars": 12288,
+  "oneLineMaxChars": 4000,     // 完整报告进卡
+  "rollingMaxChars": 60000,    // 最坏情况 = cardsKept × (oneLineMaxChars + 2)
+  "entryMaxChars": 1200,       // findings/changed/blockers 的单条上限
+  "maxFindingsEntries": 8,     // 大脑会考虑几条 findings
+  "maxChangedEntries": 12,
+  "maxBlockersEntries": 5,
+  "nextHintMaxChars": 900,
   "cardsKept": 12
 }
 ```
 
+单条过长会被**截断，不会拒绝** —— 为一个格式问题废掉整张卡等于白烧一轮。而**条数**
+超限是硬失败，因为它改变了"大脑被要求判断什么"。
+
 滚动摘要**只**由结构化字段拼成（`lib/summary.mjs`）。原始日志在结构上就进不去 prompt。
-调大前者要一起调大后者，否则老卡会更早被挤掉；改完用 `node tools/check-limits.mjs` 验证。
+改完用 `node tools/check-limits.mjs` 验证那两个滚动数字是否自洽。
 
 ---
 
@@ -224,6 +253,44 @@ state/
 ```
 
 `state/` 可以随时丢。`node bridge.mjs reset --yes` 清空它。
+
+### 开第二轮运行
+
+任务编号**每轮从 `T-001` 重新开始**，所以上一轮的 `cards/T-001.accepted.json`
+**正好落在下一轮将要写入的位置** —— 新一轮的滚动摘要可能把旧裁决当成自己的历史。
+`run init` 发现不属于当前 run 的产物时会往 stderr 打警告。
+
+处理方式是**移走**旧状态而不是删除（删掉就丢掉了"大脑当时到底判了什么"的唯一凭据）：
+
+```bash
+node bridge.mjs archive-state --label "before-v2" [--dry-run]
+```
+
+它把 `state/` 移到 `work/run-archives/<时间戳>-<runId>/`，并写一份 README 记录
+runId、时间跨度、状态与停止原因、产生了多少裁决及各类分布、以及**为什么**归档。
+不删任何东西，所以 `calls/` 和 `runs/` 都还在，想复查任何一次裁决的依据都行。
+
+它拒绝归档"没有 run、卡片、调用或轮次"的状态 —— 否则归档后再跑一次会以
+"归档成功"收场，而里面什么都没有。
+
+### 报告与防误判约定
+
+如果看结果的人**只能看到结果卡和滚动摘要**，把约定写进 `seeds/PROJECT.md`：
+
+```markdown
+- `summaryOneLine` 写完整报告：做了什么、证据（真实命令 + 退出码）、
+  与基线的对照、未改动声明、仍未解决项
+- `verify` 写真实执行的验收命令与退出码
+- `nextHint` 写详细证据文件路径，供按需核读
+- 仍须保证"只读卡就能判定"，不得把关键结论只留在文件里
+- 禁止把 mock / 合成结果当真实结论
+- 禁止以"源码里出现某字符串"代替行为证据
+```
+
+最后两条最贵。真实项目里出现过：预检脚本以**源码字符串**判断功能是否接线，而那个
+字符串在注释里也有 —— 于是未接线的模块通过了预检。
+
+模板里有一份可直接抄的版本：`seeds/PROJECT.md.template`。
 
 ---
 

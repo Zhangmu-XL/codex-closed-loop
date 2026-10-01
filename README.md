@@ -163,6 +163,9 @@ the mirror off when you are not watching.
 | Command | What it does | Codex calls |
 |---|---|---|
 | `node bridge.mjs init [dir]` | Scaffold a project: config + `PROJECT.md` template, with a probed `codex.exePath` | 0 |
+| `node bridge.mjs upgrade-config [dir] [--dry-run]` | Add config keys this project is missing; never overwrites existing values | 0 |
+| `node bridge.mjs archive-state [--label <why>] [--dry-run]` | Move the current run's state to `work/run-archives/` with a provenance README | 0 |
+| `node bridge.mjs probe-effort [--tiers a,b,c]` | Report which reasoning tiers this model accepts | ~5 tiny |
 | `node bridge.mjs doctor [--live]` | Probe CLI, auth, paths. `--live` does one real round-trip | 0 / 1 |
 | `node bridge.mjs run init` | Decompose `seeds/PROJECT.md` into a task queue | 1 (0 with a seeded queue) |
 | `node bridge.mjs ask --card <path>` | Submit a result card; block for the verdict | 1 |
@@ -283,14 +286,58 @@ bridge overrides it with `-c model_reasoning_effort="..."`. Leaving it `null` me
 brain inherits whatever your interactive sessions use, which is often tuned for chat
 rather than for judging work.
 
-Measured here (`gpt-5.6-luna`): `low` produced **0 reasoning tokens**, `high` produced
-18–49. The value is **model-specific** — that model rejects `minimal` outright — so a bad
-value fails on the first call with `unsupported_value` naming the parameter, rather than
-degrading quietly.
+**The valid tiers are model-specific and there is no flag that lists them.** Find out
+what your model accepts instead of guessing:
 
-Only applies to a **fresh** `codex exec`: `resume` accepts no `-c`, so a thread keeps the
-effort it was created with, exactly like `--sandbox` and `-m`. Change it, then `compact`
-to start a new thread with the new value.
+```bash
+node bridge.mjs probe-effort
+```
+
+It runs one small problem per tier and reports both acceptance and how much the model
+actually reasoned. Measured here (`gpt-5.6-luna`) — note that `xhigh` exists, which is
+not guessable from the docs:
+
+| tier | result | reasoning tokens |
+|---|---|---|
+| `minimal` | rejected — `unsupported_value` | — |
+| `low` | accepted | 133 |
+| `medium` | accepted | 741 |
+| `high` | accepted | 1466 |
+| `xhigh` | accepted | **1502** |
+
+Two things to note. A bad value fails on the **first real call** with
+`unsupported_value` naming the parameter, rather than degrading quietly. And a tier that
+is accepted is not necessarily doing more work — the sweep above is only meaningful
+because the probe prompt requires real reasoning; a trivial prompt measures 0 at every
+tier.
+
+Set `codex.reasoningEffort`, then `compact` to start a new thread with it: `resume`
+accepts no `-c`, so a live thread keeps the effort it was created with, exactly like
+`--sandbox` and `-m`.
+
+### When a human reads the cards
+
+`summaryOneLine` is the only field a person is guaranteed to see, and it is capped. **400
+characters holds a conclusion; it does not hold "what I did + the real command and its
+exit code + what is still unresolved."** When a human is the audience and reads only
+cards, raise it — and raise `rollingMaxChars` with it, or older cards get evicted sooner:
+
+```jsonc
+"summary": {
+  "oneLineMaxChars": 4000,     // full report in the card
+  "rollingMaxChars": 60000,    // worst case is cardsKept x (oneLineMaxChars + 2)
+  "entryMaxChars": 1200,       // per-entry cap for findings/changed/blockers
+  "maxFindingsEntries": 8,     // how many findings the brain will consider
+  "maxChangedEntries": 12,
+  "maxBlockersEntries": 5,
+  "nextHintMaxChars": 900
+}
+```
+
+Long entries are **truncated, not rejected** — failing a whole card over formatting would
+burn a round for nothing. The entry *counts* are hard failures, because they change what
+the brain is asked to judge. `node tools/check-limits.mjs` verifies the two rolling
+numbers are consistent.
 
 ### Summaries
 
@@ -352,6 +399,28 @@ state/
 ```
 
 `state/` is disposable. `node bridge.mjs reset --yes` clears it.
+
+### Starting a second run
+
+Task ids restart at `T-001` every run, so the previous run's
+`cards/T-001.accepted.json` sits **exactly where the next run will write** — and the new
+run's rolling summary can adopt the old verdict as its own history. `run init` warns on
+stderr when it finds artifacts that belong to a different run.
+
+The fix is to move the old state aside rather than delete it (deleting throws away the
+only audit trail of what the brain actually decided):
+
+```bash
+node bridge.mjs archive-state --label "before-v2" [--dry-run]
+```
+
+It moves `state/` to `work/run-archives/<timestamp>-<runId>/` and writes a README there
+recording the run id, its time span, its status and stop reason, how many verdicts it
+produced and how they broke down, and **why** it was archived. Nothing is deleted, so
+`calls/` and `runs/` remain available for anyone who wants to re-check a decision.
+
+It refuses to archive a state that holds no run, cards, calls or rounds — a re-run after
+an archive would otherwise "succeed" by archiving nothing at all.
 
 ---
 

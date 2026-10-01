@@ -20,6 +20,8 @@ import { EXIT, verdictToExit, normalizeVerdict, VerdictError } from './lib/verdi
 import { buildAskPrompt, buildPlanPrompt, PROBE_SCHEMA, PROBE_PROMPT } from './lib/prompt.mjs';
 import { renderRollingSummary, buildStateBlock, refreshRollingSummary } from './lib/summary.mjs';
 import { mirrorEnabled, pushToChat, renderVerdictReport } from './lib/queue-mirror.mjs';
+import { inspectState, archiveState, staleArtifacts, isEmptyState } from './lib/archive.mjs';
+import { probeEfforts, effortAdvice, DEFAULT_TIERS } from './lib/probe-effort.mjs';
 import {
   ensureDirs, paths, loadState, saveState, appendLedger, newRunId, runDir,
   withLock, loadCall, saveCall, callKey, writeTask, listQueue, nextPendingTask,
@@ -30,23 +32,29 @@ import {
   loadBudget, saveBudget, assertCanCall, chargeCall, budgetView, BudgetExceeded, dayKey,
 } from './lib/budget.mjs';
 
+/** Flags that never take a value, even when a bare token follows them. Must be
+ *  declared before the parseArgs call below: a `const` is in its temporal dead zone
+ *  until initialised, so a later declaration throws rather than reading undefined. */
+const KNOWN_BOOLEAN_FLAGS = new Set(['json', 'live', 'keep', 'yes', 'unattended', 'dry-run', 'no-mirror']);
+
 const argv = process.argv.slice(2);
 const { flags, verb } = parseArgs(argv);
 
+
 /** Split flags (and their values) from positional words, so a flag value can
- *  never be mistaken for the command verb. */
+ *  never be mistaken for the command verb.
+ *
+ *  A flag takes the next bare token as its value whenever one is present. This used
+ *  to be a hard-coded whitelist, which meant every new value-taking flag silently
+ *  became a boolean -- `--label before-v2` set `label: true` and dropped `before-v2`
+ *  into the positional list. Inferring it removes that whole class of mistake, and
+ *  flags that appear after all positionals are still plain booleans. */
 function parseArgs(args) {
   const out = { _: [] };
   const skip = new Set();
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    const takesValue = ['--card', '-c', '--config', '--project-root', '--note', '--executor', '--mirror-thread'];
-    if (takesValue.includes(a)) {
-      const key = a === '-c' ? 'card' : a.replace(/^--/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-      out[key] = args[i + 1];
-      skip.add(i + 1);
-      continue;
-    }
+    if (a === '-c') { out.card = args[i + 1]; skip.add(i + 1); continue; }
     if (a.startsWith('--no-')) {
       // --no-mirror turns a configured mirror off for one invocation.
       const key = a.replace(/^--no-/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase());
@@ -54,8 +62,11 @@ function parseArgs(args) {
       continue;
     }
     if (a.startsWith('--')) {
-      const key = a.replace(/^--/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-      out[key] = true;
+      const bare = a.replace(/^--/, '');
+      const key = bare.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      const next = args[i + 1];
+      const hasValue = !KNOWN_BOOLEAN_FLAGS.has(bare) && next !== undefined && !next.startsWith('-');
+      if (hasValue) { out[key] = next; skip.add(i + 1); } else { out[key] = true; }
       continue;
     }
     if (a.startsWith('-')) continue;
@@ -388,10 +399,111 @@ async function dispatch() {
   if (verb === 'selftest') { await verbSelftest(); return; }
   if (verb === 'reset') { verbReset(); return; }
   if (verb === 'status') { verbStatus(); return; }
+  if (verb === 'archive-state') { exitWith(verbArchiveState()); return; }
+  if (verb === 'probe-effort') { exitWith(await verbProbeEffort()); return; }
   if (verb === 'run' && (flags._[1] === 'init' || argv.includes('init'))) { exitWith(await cmdRunInit()); return; }
   if (verb === 'ask') { exitWith(await cmdAsk()); return; }
   if (verb === 'compact') { exitWith(await cmdCompact()); return; }
+  // An unrecognised verb is the one case that wants usage text, and it must set an exit
+  // code here: `main` prints help again on an unset code as the "no command" signal, so
+  // leaving it unset printed the whole usage block twice.
   printHelp();
+  exitWith(verb === 'help' ? 0 : EXIT.PROTOCOL);
+}
+
+/* ------------------------------------------------------------- archive-state */
+
+/**
+ * Move the current run's state aside so a new run does not inherit it.
+ *
+ * The collision it prevents is real and silent: task ids restart at T-001 every run,
+ * so the previous run's `cards/T-001.accepted.json` sits exactly where the new run
+ * writes, and the new run's rolling summary can adopt the old verdict as its own.
+ */
+function verbArchiveState() {
+  const manifest = inspectState(cfg);
+
+  // "Present but empty" is not enough to archive: after a previous archive the
+  // directory still exists with a bridge-written ledger in it, so archiving on that
+  // basis would silently produce an archive with nothing in it and report success.
+  if (isEmptyState(manifest)) {
+    out({
+      ok: false,
+      reason: !manifest.present
+        ? `no state directory at ${cfg.__stateDir}`
+        : 'nothing to archive: this state has no run, cards, calls or rounds',
+      hint: 'Nothing has run since the last archive.',
+    });
+    return 0;
+  }
+
+  if (flags.dryRun === true) {
+    out({ ok: true, dryRun: true, wouldArchive: manifest, note: 'dry run: nothing moved' });
+    return 0;
+  }
+
+  const res = archiveState(cfg, { label: typeof flags.label === 'string' ? flags.label : null });
+  if (!res.ok) {
+    out({ ok: false, reason: res.reason });
+    return EXIT.PROTOCOL;
+  }
+
+  appendLedger(cfg, {
+    kind: 'state_archived',
+    runId: res.manifest.runId,
+    archiveDir: res.archiveDirRelative,
+    files: res.manifest.files,
+    verdicts: res.manifest.verdicts,
+  });
+
+  out({
+    ok: true,
+    archived: res.archiveDirRelative,
+    files: res.manifest.files,
+    runId: res.manifest.runId,
+    status: res.manifest.status,
+    verdicts: res.manifest.verdicts,
+    note: 'state moved (not deleted); a README recording the provenance was written',
+    nextRuns: 'node bridge.mjs run init',
+  });
+  return 0;
+}
+
+/* --------------------------------------------------------------- probe-effort */
+
+/**
+ * Ask the model which reasoning tiers it accepts.
+ *
+ * Necessary because the valid set is model-specific, there is no CLI flag that lists
+ * them, and a wrong value only fails on a real call. It also reveals tiers above
+ * "high", which is not guessable from the docs.
+ */
+async function verbProbeEffort() {
+  const tiers = typeof flags.tiers === 'string'
+    ? String(flags.tiers).split(',').map((t) => t.trim()).filter(Boolean)
+    : DEFAULT_TIERS;
+
+  const report = await probeEfforts(cfg, {
+    tiers,
+    onProgress: (t) => process.stderr.write(`probing effort=${t} ...\n`),
+  });
+
+  out({
+    ok: report.accepted.length > 0,
+    model: report.model ?? '(from ~/.codex/config.toml)',
+    configured: cfg.codex.reasoningEffort ?? null,
+    accepted: report.accepted,
+    rejected: report.rejected,
+    results: report.results,
+    advice: effortAdvice(report),
+    note: 'Tiers are model-specific, and a rejected tier is information rather than an '
+      + 'error. Set codex.reasoningEffort, then `compact` so a new thread picks it up '
+      + '(resume accepts no -c, so a live thread keeps its own).',
+  });
+
+  // Exit 0 whenever the probe itself ran. A model that rejects a tier is a finding,
+  // not a failure of this command.
+  return 0;
 }
 
 /* --------------------------------------------------------------------- doctor */
@@ -556,6 +668,22 @@ function isTransportFailure(res) {
 }
 
 async function cmdRunInit() {
+  // Detect artifacts left by an earlier run BEFORE anything writes. Task ids restart at
+  // T-001, so a stale `cards/T-001.accepted.json` sits exactly where this run will
+  // write, and this run's rolling summary would adopt the old verdict as its own
+  // history. Warnings only: whether to archive, delete or reuse is the operator's call.
+  const collisions = staleArtifacts(cfg);
+  if (collisions.count > 0) {
+    process.stderr.write(
+      `bridge: warning: ${collisions.count} artifact(s) in state/ do not belong to `
+      + `run ${collisions.currentRunId ?? '(none)'}:\n`
+      + collisions.stale.slice(0, 8).map((s) => `  ${s.file}  (runId=${s.runId ?? 'unreadable'})\n`).join('')
+      + (collisions.count > 8 ? `  ... and ${collisions.count - 8} more\n` : '')
+      + 'Their task ids collide with this run\'s. Archive or remove them first:\n'
+      + '  node bridge.mjs archive-state --label "before-<why>"\n',
+    );
+  }
+
   const code = await withLock(cfg, async () => {
     const state = loadState(cfg);
     const budget = loadBudget(cfg);
@@ -1499,6 +1627,11 @@ function printHelp() {
   node bridge.mjs upgrade-config [dir] [--dry-run]
                                       add config keys this project is missing
                                       (never overwrites existing values)
+  node bridge.mjs archive-state [--label <why>] [--dry-run]
+                                      move the current run's state to
+                                      work/run-archives/<stamp>-<runId>/ with a README
+  node bridge.mjs probe-effort [--tiers a,b,c]
+                                      report which reasoning tiers this model accepts
   node bridge.mjs doctor [--live]     probe the Codex CLI (add --live for a real round-trip)
   node bridge.mjs run init            have Codex decompose seeds/PROJECT.md into a task queue
   node bridge.mjs ask --card <file>   submit a result card, block until Codex answers

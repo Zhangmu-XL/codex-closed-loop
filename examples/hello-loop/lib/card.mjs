@@ -18,7 +18,7 @@ export class CardError extends Error {
   }
 }
 
-function asStringArray(value, field, maxItems, errors) {
+function asStringArray(value, field, maxItems, errors, maxChars) {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) {
     errors.push(`${field} must be an array of strings`);
@@ -27,7 +27,9 @@ function asStringArray(value, field, maxItems, errors) {
   const cleaned = [];
   for (const item of value) {
     if (typeof item !== 'string') { errors.push(`${field} entries must be strings`); continue; }
-    cleaned.push(item.length > 300 ? `${item.slice(0, 297)}...` : item);
+    // Truncated, not rejected: a long entry is a formatting problem, and failing the
+    // whole card over it would burn a round for nothing.
+    cleaned.push(item.length > maxChars ? `${item.slice(0, maxChars - 3)}...` : item);
   }
   if (cleaned.length > maxItems) {
     errors.push(`${field} has ${cleaned.length} entries, max ${maxItems}`);
@@ -88,9 +90,11 @@ export function validateCard(file, cfg) {
     );
   }
 
-  const changed = asStringArray(card.changed, 'changed', 10, errors);
-  const findings = asStringArray(card.findings, 'findings', 5, errors);
-  const blockers = asStringArray(card.blockers, 'blockers', 5, errors);
+  const s = cfg.summary ?? {};
+  const maxEntryChars = s.entryMaxChars ?? 300;
+  const changed = asStringArray(card.changed, 'changed', s.maxChangedEntries ?? 10, errors, maxEntryChars);
+  const findings = asStringArray(card.findings, 'findings', s.maxFindingsEntries ?? 5, errors, maxEntryChars);
+  const blockers = asStringArray(card.blockers, 'blockers', s.maxBlockersEntries ?? 5, errors, maxEntryChars);
   if (errors.length) {
     throw new CardError('CARD_INVALID', errors.join('; '), 'Fix the listed fields and resubmit. The brain was not called.');
   }
@@ -106,7 +110,7 @@ export function validateCard(file, cfg) {
     verify: card.verify && typeof card.verify === 'object'
       ? { command: String(card.verify.command ?? '').slice(0, 200), exitCode: card.verify.exitCode ?? null }
       : null,
-    nextHint: typeof card.nextHint === 'string' ? card.nextHint.slice(0, 300) : null,
+    nextHint: typeof card.nextHint === 'string' ? card.nextHint.slice(0, s.nextHintMaxChars ?? 300) : null,
     metrics: card.metrics && typeof card.metrics === 'object'
       ? { turns: card.metrics.turns ?? null, durationMs: card.metrics.durationMs ?? null }
       : null,

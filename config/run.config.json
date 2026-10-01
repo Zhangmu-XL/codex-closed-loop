@@ -1,6 +1,6 @@
 {
   "configVersion": 2,
-  "$comment": "Reference config. Easiest path: run `node bridge.mjs init <dir>`, which writes this file with a probed codex.exePath. See README. After updating the framework, `node bridge.mjs upgrade-config` adds any keys a project is missing without touching existing values.",
+  "$comment": "Reference config. Easiest path: run `node bridge.mjs init <dir>`, which writes this file with a probed codex.exePath. See README.",
   "project": {
     "name": "demo",
     "workspace": "."
@@ -43,7 +43,12 @@
     "oneLineMaxChars": 400,
     "rollingMaxChars": 12288,
     "cardsKept": 12,
-    "compactOnOverflow": true
+    "compactOnOverflow": true,
+    "entryMaxChars": 300,
+    "maxChangedEntries": 10,
+    "maxFindingsEntries": 5,
+    "maxBlockersEntries": 5,
+    "nextHintMaxChars": 300
   },
   "retry": {
     "backoffMs": 2000,
