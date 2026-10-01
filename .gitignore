@@ -5,6 +5,12 @@ state/
 # Generated per-task briefs.
 seeds/task-*.txt
 
+# Scratch commit-message files. `git commit -F <file>` avoids shell quoting of
+# multi-line messages, which makes it very easy to leave the file tracked.
+.msg.txt
+.git-commit-msg.txt
+*.commitmsg
+
 # The example's runtime state (its seeds/ and work/ are tracked on purpose).
 examples/*/state/
 examples/*/.codex-scratch/
