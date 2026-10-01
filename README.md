@@ -201,10 +201,27 @@ Everything lives in `config/run.config.json`.
 "codex": {
   "exePath": null,               // null = resolve from PATH / CODEX_CLI_PATH / known install dirs
   "model": null,                 // null = whatever ~/.codex/config.toml says
+  "reasoningEffort": null,       // null = inherit; see below
   "sandbox": "workspace-write",  // the brain should not get full access by default
   "workdir": ".codex-scratch"    // where the brain runs, so it cannot touch your code
 }
 ```
+
+### Reasoning effort
+
+There is no `--reasoning-effort` flag on `codex exec` — it is a config key, so the
+bridge overrides it with `-c model_reasoning_effort="..."`. Leaving it `null` means
+the brain inherits whatever your interactive sessions use, which is often tuned for
+chat rather than for judging work.
+
+Measured here (`gpt-5.6-luna`, trivial prompt): `low` produced **0 reasoning tokens**,
+`high` produced 18. The value is **model-specific** — that model rejects `minimal`
+outright — so a bad value fails on the first call with `unsupported_value` naming the
+parameter, rather than degrading quietly.
+
+Only applies to a **fresh** `codex exec`: `resume` accepts no `-c`, so a thread keeps
+the effort it was created with, exactly like `--sandbox` and `-m`. Change it, then
+`compact` to start a new thread with the new value.
 
 ### Limits
 

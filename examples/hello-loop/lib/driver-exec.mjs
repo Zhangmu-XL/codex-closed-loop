@@ -67,8 +67,7 @@ export function resolveCodexExe(cfg, { fresh = false } = {}) {
  * It has no -C, so the working root is the child's cwd instead, and it has no -m
  * or -s, so model/sandbox overrides apply only to the first call of a thread.
  */
-function buildArgs(cfg, { threadId, schemaPath, lastMessagePath }) {
-  const args = ['exec'];
+function buildArgs(cfg, { threadId, schemaPath, lastMessagePath }) {  const args = ['exec'];
   if (threadId) {
     args.push('resume', threadId);
     args.push('--json');
@@ -86,6 +85,12 @@ function buildArgs(cfg, { threadId, schemaPath, lastMessagePath }) {
   args.push('-C', cfg.__workdir);
   args.push('--sandbox', cfg.codex.sandbox);
   if (cfg.codex.model) args.push('-m', cfg.codex.model);
+  // Reasoning effort has no dedicated flag; it is a config key overridden with -c.
+  // Fresh exec only: resume accepts no -c, so a thread keeps the effort it was
+  // created with, exactly like --sandbox and -m.
+  if (cfg.codex.reasoningEffort) {
+    args.push('-c', `model_reasoning_effort="${cfg.codex.reasoningEffort}"`);
+  }
   for (const extra of cfg.codex.extraArgs ?? []) args.push(extra);
   args.push('-'); // read the prompt from stdin
   return args;
@@ -214,8 +219,18 @@ export async function invokeCodex(cfg, prompt, { threadId = null, schemaPath = n
   return result;
 }
 
-/** Cheap liveness probe used by `bridge.mjs doctor`. */
-export function probeCli(cfg) {
+/**
+ * argv builder, exposed for tests.
+ *
+ * The reasoning-effort override is fresh-exec-only and there is no other cheap way to
+ * assert that: a live call cannot tell you whether argv was right, only that the call
+ * worked.
+ */
+export function buildArgsForTest(cfg, opts) {
+  return buildArgs(cfg, opts);
+}
+
+/** Cheap liveness probe used by `bridge.mjs doctor`. */export function probeCli(cfg) {
   const { exe, version, candidates } = resolveCodexExe(cfg, { fresh: true });
   const authPath = join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.codex', 'auth.json');
   return { exe, version, candidates, authPresent: existsSync(authPath), authPath };

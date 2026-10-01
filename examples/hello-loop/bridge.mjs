@@ -270,6 +270,13 @@ function schemaPath(name) {
  * `exitWith` only sets `process.exitCode`, and without a real return every verb
  * would fall through into the ones below it.
  */
+/**
+ * Handle the verb and set the exit code.
+ *
+ * Every branch must set one. `printHelp` below fires on an unset exit code as the
+ * "no command matched" signal, so a branch that returns without setting it makes
+ * usage text appear after a command that actually succeeded.
+ */
 async function dispatch() {
   if (verb === 'doctor') { await verbDoctor(); return; }
   if (verb === 'selftest') { await verbSelftest(); return; }
@@ -295,7 +302,7 @@ async function verbDoctor() {
     probedCandidates: probe.candidates,
   });
 
-  if (!flags.json && !flags.live) return;
+  if (!flags.json && !flags.live) { exitWith(0); return; }
 
   const schema = join(cfg.__stateDir, 'probe.schema.json');
   writeJsonAtomic(schema, PROBE_SCHEMA);

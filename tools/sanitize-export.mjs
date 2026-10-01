@@ -35,6 +35,8 @@ const PATTERNS = [
   /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/,       // timestamps from a real run
 ];
 
+// `.git` holds reflogs with the local committer identity. Those never leave the
+// machine, so scanning them produces false alarms that hide real leaks.
 const SKIP = new Set(['.git', 'node_modules']);
 let problems = 0;
 let scanned = 0;
