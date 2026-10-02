@@ -93,6 +93,14 @@ export const DEFAULTS = {
   // How many executor runs one `ask --executor` chain may launch before giving up.
   // Guards against a misunderstanding turning into an unbounded loop.
   maxExecutorRuns: 25,
+  // How many times a stopped run may be resumed by a human supplying a `--note`.
+  //
+  // Resume exists because `stop` means the brain asked a question and the handoff file
+  // tells the operator to answer it with `--note` -- a path that used to be unreachable,
+  // leaving `run init` (full re-plan, new ids, new thread) as the only way forward.
+  // The cap keeps that from becoming an unattended retry loop: only a note resumes, and
+  // a run that needs more than a handful of answers is not converging.
+  maxHumanResumes: 5,
   unattended: {
     // When true, the prompt tells the brain to keep the loop running by itself:
     // return `next` while any work remains, and reserve `pass`/`stop` for a

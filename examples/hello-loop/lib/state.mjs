@@ -71,12 +71,22 @@ export const DEFAULT_STATE = {
   currentTaskId: null,
   lastVerdict: null,
   stopReason: null,
+  // Which task the `stop` was about, so a human resuming with a note answers THAT task
+  // rather than silently redirecting the run at whatever card arrives next.
+  stoppedForTaskId: null,
+  // How many times a human has resumed this run with a note (capped by maxHumanResumes).
+  humanResumes: 0,
   threadId: null,
   threadStartedAt: null,
   statelessMode: false,
   revised: {},              // taskId -> rework attempts used
   createdAt: null,
   updatedAt: null,
+  // Wall-clock at the last moment the bridge OR an executor was actually doing work.
+  // `maxRunDurationMs` is measured against active time, not against createdAt, so an
+  // idle gap (a crashed executor, an overnight pause) does not consume the run's life.
+  lastActiveAt: null,
+  activeMs: 0,
 };
 
 export function loadState(cfg) {

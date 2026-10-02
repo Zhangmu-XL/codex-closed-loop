@@ -140,6 +140,51 @@ node bridge.mjs ask --card state/cards/T-001.result.json `
 Codex 只在这些情况找人：缺权限/凭证、动作不可逆或越界、任务真歧义、目标已达成或推不动。
 停下时写 `state/handoff/needs-human-<taskId>.md`，里面有原因、它需要什么、怎么恢复。
 
+### 宿主代投（执行者 spawn 不了的时候）
+
+`--executor` 需要能创建带管道 stdio 的子进程。受限沙箱会挡住（`spawn EPERM`），而且
+沙箱里的 agent 往往连卡片文件都写不了。
+
+**这不是降级模式 —— 这才是原始设计。** 闭环的契约只有这一条：*某个*东西跑任务、
+*某个*东西写卡、拿着卡的 agent 自己调 `ask`。**具体哪个进程启动 worker，不属于这个契约。**
+
+所以由宿主来驱动：
+
+```powershell
+# 宿主负责启动 worker（在这里是什么都行），然后投递卡片
+node bridge.mjs ask --card state/cards/T-001.result.json --unattended
+```
+
+worker 写不了文件时，用 stdin 传卡：
+
+```powershell
+node bridge.mjs ask --card - < card.json
+```
+
+`ask` 阻塞、返回一份 JSON 裁决、退出码说明下一步。这些都不要求 bridge 掌握进程控制权。
+`--executor` 能用就用；**它用不了不等于功能缺失**。
+
+### 回答大脑，并把 run 拿回来
+
+大脑返回 `stop` 是在**提问**。`state/handoff/` 里的文件写明问的是什么，答案用 `--note`
+递回去 —— **同一个 run、同一条线程**，不重新规划、不重编任务号：
+
+```powershell
+node bridge.mjs ask --card state/cards/T-002.result.json --note "用第二个文件"
+```
+
+**没 note 就仍然拒绝** —— 这正是防止无人值守循环自己重启的机制。有 note 就代表人来了，
+于是恢复。这次决定会记进台账，`maxHumanResumes`（默认 5）限制一个 run 能被救回几次。
+
+### 寿命门按"干活的时间"算，不按日历
+
+`timeouts.maxRunDurationMs` 以**活跃时间**计。bridge 在每次 Codex 往返和每次执行者运行后
+刷新活动锚点，**空档期不计入**。
+
+这个区分有实际代价：曾有一次执行者崩溃、5.5 小时没人在，下一次 `ask` 被
+`alive 398min` 拒绝 —— 干掉了一个已经干了几轮实活的 run。**空档不是预算。** 但真正
+卡死的循环照样会撞上线。
+
 ### 在 Codex 界面边跑边看
 
 ```powershell

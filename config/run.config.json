@@ -63,5 +63,6 @@
     "enabled": false,
     "thread": null,
     "timeoutMs": 30000
-  }
+  },
+  "maxHumanResumes": 5
 }

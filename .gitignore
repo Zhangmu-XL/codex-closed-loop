@@ -5,6 +5,13 @@ state/
 # Generated per-task briefs.
 seeds/task-*.txt
 
+# install-bridge records the hashes it installed here, so the NEXT install can tell a
+# local edit from a stale copy. It is machine state, not source.
+.codex-bridge-manifest.json
+
+# Backups install-bridge makes when a project file was modified locally.
+*.bak-*
+
 # Scratch commit-message files. `git commit -F <file>` avoids shell quoting of
 # multi-line messages, which makes it very easy to leave the file tracked.
 .msg.txt

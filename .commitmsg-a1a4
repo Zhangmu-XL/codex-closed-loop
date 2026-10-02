@@ -1,0 +1,52 @@
+Make a stopped run recoverable, measure lifetime by work, stop eating local patches
+
+Four issues reported from a real deployment. All four reproduced in the code; three
+were bugs and one was a documentation failure.
+
+A1. The documented recovery step did not work
+    `stop` means the brain asked a human a question, and the handoff file it writes
+    says to answer with `ask --note`. That path was unreachable: the status check ran
+    unconditionally, so the answer returned exit 5 and the ONLY way forward was
+    `run init` -- full re-plan, new task ids, new thread, and the round the human was
+    answering thrown away. Three restarts at ~300k tokens each was the observed cost.
+
+    Now a note resumes, on the same run and the same thread. Without a note a stopped
+    run is still refused -- that is what keeps an unattended loop from restarting
+    itself. Resumes are capped by maxHumanResumes (5) because a run needing more than a
+    handful of answers is not converging.
+
+    Two things this had to get right, both found by testing rather than reading:
+      - the stopped check must run BEFORE the replay cache. `stop` is cached under the
+        same key (it does not consume a revise attempt), so replaying it would hand back
+        the very stop the note was answering, and the run would report exit 30 while
+        still being stopped.
+      - a per-run counter cannot distinguish "just resumed" from "resumed earlier", so
+        the cache skip keys off the in-memory wasStopped flag instead.
+
+A2. The lifetime ceiling counted idle time
+    `elapsed = Date.now() - state.createdAt`, so an executor crash plus 5.5 unattended
+    hours killed a live run with `alive 398min`. The ceiling now measures ACTIVE time:
+    the bridge stamps lastActiveAt on every Codex round-trip and every executor run, and
+    idle gaps do not count. A genuinely stuck loop still trips it.
+
+A3. Host-driven dispatch was framed as a missing feature
+    `--executor` needs a process that can spawn children with piped stdio, which a
+    confined sandbox blocks. But the loop's contract never required the bridge to own
+    process control -- only that someone runs the task, someone writes the card, and the
+    holder of the card calls `ask`. That is now stated plainly, and `--card -` reads a
+    card from stdin for workers that cannot write files. (Which was itself broken: `-`
+    starts with a dash, so the argument parser read `--card -` as the boolean true.)
+
+A4. install-bridge silently destroyed local patches
+    `cpSync(..., { force: true })` overwrote lib/ unconditionally, so a project that had
+    patched lib/prompt.mjs lost it to a framework upgrade with no warning and no backup.
+    It now records installed hashes in .codex-bridge-manifest.json, which is what lets
+    the next run tell a LOCAL EDIT from a stale copy of an older version. A locally
+    modified file is refused (exit 3), named, and the report explains the two ways
+    forward: --backup keeps a copy, --force discards it. --dry-run reports without
+    being a failure.
+
+    The same README section now says to run the suite against the copy you actually run:
+    a clean framework run says nothing about a patched project copy.
+
+30 new assertions (S26c, S26d, S39, S40); 237 offline assertions total.

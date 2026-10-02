@@ -65,10 +65,15 @@ function parseArgs(args) {
       const bare = a.replace(/^--/, '');
       const key = bare.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
       const next = args[i + 1];
-      const hasValue = !KNOWN_BOOLEAN_FLAGS.has(bare) && next !== undefined && !next.startsWith('-');
+      // `-` is the stdin sentinel, not a flag: `--card -` must take it as the value.
+      const isSentinel = next === '-';
+      const hasValue = !KNOWN_BOOLEAN_FLAGS.has(bare) && next !== undefined
+        && (isSentinel || !next.startsWith('-'));
       if (hasValue) { out[key] = next; skip.add(i + 1); } else { out[key] = true; }
       continue;
     }
+    // A bare `-` is a positional value (the stdin sentinel), never the verb.
+    if (a === '-') { if (!skip.has(i)) out._.push(a); continue; }
     if (a.startsWith('-')) continue;
     if (!skip.has(i)) out._.push(a);
   }
@@ -603,14 +608,34 @@ async function runDispatch() {
 }
 
 /* ================================================================== commands == */
+/**
+ * Record that real work just happened, and how much of it was not idle waiting.
+ *
+ * The lifetime ceiling is measured against this rather than against `createdAt`, so an
+ * idle gap (a crashed executor, an overnight pause) does not consume a run's budget.
+ * Deliberately not a timer: it is stamped by the operations that cost something.
+ */
+function markActive(state, workedMs = 0) {
+  const now = new Date().toISOString();
+  state.lastActiveAt = now;
+  if (workedMs > 0) state.activeMs = (state.activeMs ?? 0) + workedMs;
+  return state;
+}
+
 async function guardedCall(cfg_, state, budget, meta, prompt) {
   // Gate first: a refused call must not cost a token.
   assertCanCall(cfg_, state, budget, meta);
+
+  // Heartbeat: the round-trip about to happen is real work, so it refreshes the
+  // lifetime anchor before the call rather than after. Recording it afterwards would
+  // let a crash during a long call look like idleness.
+  markActive(state);
 
   // `freshThread` is what makes `compact` a rollover: the whole point is to leave
   // the accumulated thread behind and reseed from the rolling summary.
   const useThread = meta.freshThread ? null : (state.statelessMode ? null : (state.threadId ?? null));
 
+  const startedAt = Date.now();
   let res;
   let lastError = null;
   for (let attempt = 0; attempt <= cfg_.retry.maxTransportRetries; attempt++) {
@@ -630,6 +655,7 @@ async function guardedCall(cfg_, state, budget, meta, prompt) {
       await new Promise((r) => setTimeout(r, cfg_.retry.backoffMs * (attempt + 1)));
     }
   }
+  markActive(state, Date.now() - startedAt);
 
   if (res.threadId && res.threadId !== state.threadId) {
     state.threadId = res.threadId;
@@ -847,12 +873,29 @@ async function cmdAsk() {
     const state = loadState(cfg);
     const budget = loadBudget(cfg);
 
-    // ---- wall-clock deadline: the only bound a stalled loop cannot argue with
+    // ---- lifetime deadline -------------------------------------------------
+    //
+    // Measured against ACTIVE time, not against `createdAt`.
+    //
+    // A pure wall clock conflates "this run has been working for six hours" with "this
+    // run sat idle for five and a half because an executor crashed and nobody was at the
+    // keyboard". The second one killed a live run: `alive 398min` after a 5.5h gap, even
+    // though the run had done a couple of rounds of work. Idle time is not a budget.
+    //
+    // `lastActiveAt` is refreshed on every round-trip and every executor run, so the
+    // ceiling now means "six hours of actual work". A genuinely stuck loop still trips it.
     const deadline = cfg.timeouts.maxRunDurationMs;
-    if (deadline > 0 && state.createdAt) {
-      const elapsed = Date.now() - Date.parse(state.createdAt);
-      if (elapsed > deadline) return budgetStop(new BudgetExceeded('MAX_DURATION',
-        `run has been alive ${Math.round(elapsed / 60000)}min, maxRunDurationMs=${deadline}`));
+    if (deadline > 0) {
+      const anchor = state.lastActiveAt ?? state.createdAt;
+      if (anchor) {
+        const elapsed = Date.now() - Date.parse(anchor);
+        if (elapsed > deadline) {
+          return budgetStop(new BudgetExceeded('MAX_DURATION',
+            `run has been active ${Math.round((state.activeMs ?? 0) / 60000)}min `
+            + `(idle ${Math.round((elapsed - (state.activeMs ?? 0)) / 60000)}min excluded), `
+            + `maxRunDurationMs=${deadline}`));
+        }
+      }
     }
 
     // ---- card validation: no tokens are spent when this throws
@@ -875,9 +918,77 @@ async function cmdAsk() {
     // The card's bytes are part of the identity: a changed card is a new question.
     const cardHash = cardFingerprint(rawCardText(flags.card));
     const key = callKey(cfg, { taskId: card.taskId, attempt, kind: 'ask', cardHash });
+    // Set by the resume block below when this invocation is answering a stop.
+    let wasStopped = false;
+
+    // ---- a human answering a stopped run -----------------------------------
+    //
+    // Runs BEFORE the replay cache, deliberately. A stopped run must refuse, or resume,
+    // on the strength of the note alone -- if the cache answered first, re-submitting an
+    // identical card would replay the archived `stop` and report exit 30 for a run that
+    // is in fact still stopped and still waiting for a person.
+    //
+    // `stop` means the brain asked for a human, and the handoff file it writes says the
+    // answer is given back with `ask --note`. That path used to be unreachable: this
+    // check ran unconditionally, so the documented recovery step returned exit 5 and the
+    // only way out was `run init` -- a full re-plan, new task ids, a new thread, and the
+    // loss of the round the human was answering. Three restarts were the observed cost.
+    //
+    // The stickiness that IS wanted is against an unattended loop restarting itself, not
+    // against a person answering a question. So: a note from a human resumes, silence
+    // does not, and either way it is recorded.
+    if (state.status === 'stopped') {
+      wasStopped = true;
+      if (!note) {
+        fail('PROTOCOL', {
+          hint: `run is stopped (${state.stopReason}). Answer the question with `
+            + '`ask --card <card> --note "<your answer>"`, or start over with `run init`.',
+        });
+      }
+
+      const stopTask = state.stoppedForTaskId ?? null;
+      if (stopTask && card.taskId !== stopTask) {
+        fail('PROTOCOL', {
+          hint: `run is stopped waiting on a human for ${stopTask}, but this card is for `
+            + `${card.taskId}. Answer for ${stopTask}, or run \`run init\` to start over.`,
+        });
+      }
+
+      const resumes = (state.humanResumes ?? 0) + 1;
+      if (resumes > cfg.maxHumanResumes) {
+        fail('PROTOCOL', {
+          hint: `this run has already been resumed ${state.humanResumes} times `
+            + `(maxHumanResumes=${cfg.maxHumanResumes}). Something is not converging -- `
+            + 'fix the cause and run `run init`.',
+        });
+      }
+
+      appendLedger(cfg, {
+        kind: 'resumed_by_human',
+        taskId: card.taskId,
+        attempt,
+        resumeNumber: resumes,
+        note: note.slice(0, 500),
+        stopReason: state.stopReason,
+      });
+      state.humanResumes = resumes;
+      state.status = 'running';
+      state.stopReason = null;
+      state.stoppedForTaskId = null;
+      saveState(cfg, state);
+    }
 
     // ---- idempotency + crash replay: an already-answered call returns its verdict
-    const prior = loadCall(cfg, key);
+    //
+    // Skipped when a human just answered a stop in this same invocation. The stop
+    // verdict is cached under the same key (same task, same attempt -- a `stop` does not
+    // consume a revise attempt), so replaying it would hand back the very `stop` the note
+    // was answering.
+    //
+    // The test is `wasStopped`, captured before the resume block cleared the status: a
+    // per-run flag would be wrong here, since a run may be resumed more than once and a
+    // counter cannot tell "just resumed" from "resumed earlier in this run".
+    const prior = wasStopped ? null : loadCall(cfg, key);
     if (prior?.verdict) {
       appendLedger(cfg, {
         kind: 'ask_replayed', taskId: card.taskId, attempt, cardHash,
@@ -891,10 +1002,6 @@ async function cmdAsk() {
     }
     if (prior && !prior.verdict) {
       appendLedger(cfg, { kind: 'ask_replay_after_crash', taskId: card.taskId, attempt, cardHash });
-    }
-
-    if (state.status === 'stopped') {
-      fail('PROTOCOL', { hint: `run is stopped (${state.stopReason}). Run \`run init\` to start a new run.` });
     }
 
     // Auto-compact: an unattended loop must not grow its thread context without
@@ -1051,6 +1158,7 @@ async function driveUnattended(firstNext, code, { note, unattended }) {
       appendLedger(cfg, { kind: 'executor_launch', taskId: current.taskId, depth, command: cmd });
       process.stderr.write(`[bridge] executor run ${depth}/${maxExecutorRuns} for ${current.taskId}\n`);
 
+      const executorStartedAt = Date.now();
       const child = spawnSync(cmd, {
         cwd: cfg.__root,
         // stdout captured so the executor's chatter cannot corrupt this command's
@@ -1061,6 +1169,12 @@ async function driveUnattended(firstNext, code, { note, unattended }) {
         encoding: 'utf8',
       });
       if (child.stdout) process.stderr.write(child.stdout);
+      // The executor was working, not the loop idling -- refresh the lifetime anchor
+      // and bank the time. This is the exact spot where a 5.5h crash used to consume
+      // the run's whole maxRunDurationMs budget.
+      const freshState = loadState(cfg);
+      markActive(freshState, Date.now() - executorStartedAt);
+      saveState(cfg, freshState);
 
       appendLedger(cfg, { kind: 'executor_exit', taskId: current.taskId, depth, status: child.status, error: child.error?.message ?? null });
 
@@ -1378,6 +1492,9 @@ function applyVerdictState(cfg_, state, budget, card, task, verdict, res) {
   if (verdict.action === 'stop') {
     state.status = 'stopped';
     state.stopReason = verdict.reason;
+    // Remember WHICH task the question is about. Resuming with a note must answer that
+    // task, not silently redirect the run onto whatever card arrives next.
+    state.stoppedForTaskId = taskId;
     // `stop` is the brain's way of asking for a human. Park an explicit request so
     // an unattended operator can see why the loop halted, instead of finding it
     // silently frozen.

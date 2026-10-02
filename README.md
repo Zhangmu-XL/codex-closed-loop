@@ -122,6 +122,21 @@ It is conservative by construction: **existing values always win** (including `n
 nothing is ever removed, and it reports keys the schema no longer knows about so you can
 decide. `configVersion` tracks the drift, and a second run is a no-op.
 
+`install-bridge` is equally careful about the code it copies:
+
+```bash
+node tools/install-bridge.mjs <project-root> [--dry-run] [--force] [--backup]
+```
+
+It records the hashes it installed in `.codex-bridge-manifest.json`, so the next run can
+tell **a local edit from a stale copy**. A file the project changed is **refused**, not
+overwritten — name it with `--dry-run`, keep it with `--backup`, or discard it with
+`--force`. (An untouched copy from an older version is still upgraded, which is the point.)
+
+If you patch the bridge for your own environment, run the suite against **the copy you
+actually run**: `node bridge.mjs selftest` inside the project. `208 passed` in the
+framework directory says nothing about your patched one.
+
 `run init` prints a `launchCommand`. Run it, or point your own agent at the brief.
 When the agent has a card, `node bridge.mjs ask --card <path>` closes the round.
 
@@ -140,7 +155,34 @@ this and an orchestrator.
 
 Placeholders: `{taskId}` `{brief}` `{card}` `{root}`.
 
-### Watch it in the Codex desktop app
+#### Host-driven dispatch (when the executor cannot spawn)
+
+`--executor` needs a process that can spawn children with piped stdio. A confined
+sandbox blocks that (`spawn EPERM`), and sandboxed agents often cannot write the card
+file either.
+
+**That is not a degraded mode — it is the original design.** The loop's contract is only
+this: *someone* runs the task, *someone* writes the card, and the agent holding the card
+calls `ask` itself. Which process starts the worker is not part of it.
+
+So drive it from the host:
+
+```bash
+# the host launches the worker (whatever that means here), then reports the card
+node bridge.mjs ask --card state/cards/T-001.result.json --unattended
+```
+
+and pass the card on stdin when the worker cannot write files:
+
+```bash
+node bridge.mjs ask --card - < card.json
+```
+
+`ask` blocks, returns one JSON verdict, and the exit code says what to do. Nothing about
+that requires the bridge to own process control. Use `--executor` when it happens to
+work; do not treat its absence as a missing feature.
+
+### Watching it in the Codex desktop app
 
 A headless `codex exec` thread is real but the app will not show it as a
 conversation you can watch. Use **two threads** — the app holds a writer lock on its
@@ -339,6 +381,32 @@ burn a round for nothing. The entry *counts* are hard failures, because they cha
 the brain is asked to judge. `node tools/check-limits.mjs` verifies the two rolling
 numbers are consistent.
 
+## Answering the brain, and getting a run back
+
+When the brain returns `stop` it is asking a question. The handoff file in
+`state/handoff/` names it, and the answer goes back with a note — **on the same run and
+the same thread**, so nothing is re-planned and no task is renumbered:
+
+```bash
+node bridge.mjs ask --card state/cards/T-002.result.json --note "use the second file"
+```
+
+Without a note a stopped run stays refused: that is what keeps an unattended loop from
+restarting itself behind your back. A note is a person, so it resumes. The decision is
+recorded in the ledger, and `maxHumanResumes` (default 5) caps how many times a single
+run can be revived — a run needing more than a handful of answers is not converging.
+
+### The lifetime ceiling measures work, not the calendar
+
+`timeouts.maxRunDurationMs` is measured against **active** time. The bridge stamps an
+activity anchor on every Codex round-trip and every executor run, and idle gaps do not
+count against it.
+
+That distinction matters in practice: an executor once crashed, nobody was at the
+keyboard for 5.5 hours, and the next `ask` was refused with `alive 398min` — killing a run
+that had done a couple of rounds of real work. Idle time is not a budget. A genuinely
+stuck loop still trips the ceiling.
+
 ### Summaries
 
 ```jsonc
@@ -467,15 +535,16 @@ Read this before trusting it with something that matters.
 - **The brain needs a runtime that can spawn processes.** `codex exec` is driven as a
   child process with piped stdio. In a sandbox that blocks that (DSH's `workspace-write`
   does), `ask` fails with `spawn EPERM`. That is reported as infrastructure failure and
-  is **not charged against the budget**, but the loop cannot complete.
+  is **not charged against the budget**. For a sandboxed executor, drive the loop from
+  the host — see [host-driven dispatch](#host-driven-dispatch-when-the-executor-cannot-spawn).
 - **No real rework cycle has been exercised** — the `rework → pass` path is tested by
   editing a card, never by making an executor genuinely redo work.
 - **The MCP transport is not implemented.** Requirements mention
   `codex-controller-mcp` and the Codex API; both are stubs with a documented
   degradation path, not working adapters.
 - **`codex exec resume` accepts far fewer flags than a fresh `exec`** — no `-C`, `-s`
-  or `-m`. Working directory is therefore the child's cwd, and sandbox/model only
-  apply on the first call of a thread. Handled, but surprising.
+  or `-m`. Working directory is therefore the child's cwd, and sandbox/model/reasoning
+  effort only apply on the first call of a thread. Handled, but surprising.
 
 ## How this was built
 
