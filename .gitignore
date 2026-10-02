@@ -13,10 +13,13 @@ seeds/task-*.txt
 *.bak-*
 
 # Scratch commit-message files. `git commit -F <file>` avoids shell quoting of
-# multi-line messages, which makes it very easy to leave the file tracked.
+# multi-line messages, which makes it very easy to leave the file tracked. Match both
+# `something.commitmsg` and `.commitmsg-anything` -- the first pattern missed the
+# second and the file got committed twice.
+*.commitmsg
+.commitmsg*
 .msg.txt
 .git-commit-msg.txt
-*.commitmsg
 
 # The example's runtime state (its seeds/ and work/ are tracked on purpose).
 examples/*/state/
